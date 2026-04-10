@@ -18,7 +18,7 @@ tkinter
 Install dependencies:
 
 ```bash
-pip install h5py numpy matplotlib Pillow
+pip install h5py numpy matplotlib scipy Pillow 
 ```
 
 ---
