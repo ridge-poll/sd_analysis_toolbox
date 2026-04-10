@@ -36,6 +36,15 @@ python main_gui.py
 python main_gui.py path/to/recording.h5 path/to/tiff_folder
 ```
 
+```bash
+# Or open by clicking on provided launcher scripts
+# macOS
+run_viewer.command
+
+# Windows
+run_viewer.bat
+```
+
 ---
 
 ## File Structure
@@ -45,10 +54,36 @@ utils.py            Shared utilities: LRUCache, image helpers, sort key
 ephys_file.py       HDF5 data-access layer (no GUI)
 ephys_panel.py      Ephys trace viewer panel (tk.Frame)
 tiff_panel.py       TIFF image stack viewer panel (tk.Frame)
+spectrogram.py      Spectrogram computation
 sync_controller.py  Master clock — drives both panels in sync
 main_gui.py         Top-level application window
 ```
 
+```
+sd_analysis_toolbox/
+│
+├── sd_viewer/
+│   ├── main_gui.py              Top-level application window
+│   ├── ephys_file.py            HDF5 data-access layer (no GUI)
+│   ├── ephys_panel.py           Ephys trace viewer panel (tk.Frame)
+│   ├── tiff_panel.py            TIFF image stack viewer panel (tk.Frame)
+│   ├── spectrogram.py           Spectrogram computation + rendering
+│   ├── sync_controller.py       Master clock — drives both panels in sync
+│   └── utils.py                 Shared utilities: LRUCache, helpers
+│
+├── assets/
+│   ├── demo_screenshot.png
+│   └── demo.mp4
+│
+├── scripts/
+│   ├── run_viewer.command
+│   ├── run_viewer.bat
+│   ├── setup.command
+│   └── setup.bat
+│
+├── requirements.txt
+└── README.md
+```
 ---
 
 ## Interface
@@ -70,7 +105,7 @@ main_gui.py         Top-level application window
 | **Decimate** | Display downsampling factor. Higher = faster redraws, less detail. At 10,000 Hz, a value of 10 renders 1,000 points/second — sufficient for visual inspection. |
 | **Cache** | Number of data chunks to keep in memory. Rarely needs adjustment. |
 | **Y range** | Per-channel y-axis min/max fields at the bottom of the panel. Edit and press **Apply** to rescale without reloading. |
-| **Spectrogram** | Currently disabled. Will toggle between trace and spectrogram views once implemented. |
+| **Spectrogram** | Toggles between trace and spectrogram views. |
 
 ### Bottom Sync Controls
 
