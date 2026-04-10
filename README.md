@@ -50,16 +50,6 @@ run_viewer.bat
 ## File Structure
 
 ```
-utils.py            Shared utilities: LRUCache, image helpers, sort key
-ephys_file.py       HDF5 data-access layer (no GUI)
-ephys_panel.py      Ephys trace viewer panel (tk.Frame)
-tiff_panel.py       TIFF image stack viewer panel (tk.Frame)
-spectrogram.py      Spectrogram computation
-sync_controller.py  Master clock — drives both panels in sync
-main_gui.py         Top-level application window
-```
-
-```
 sd_analysis_toolbox/
 │
 ├── sd_viewer/
