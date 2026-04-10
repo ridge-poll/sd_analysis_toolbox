@@ -11,14 +11,17 @@ Python 3.10+
 h5py
 numpy
 matplotlib
+scipy
 Pillow
 tkinter
 ```
 
+> Note: `tkinter` is included with most Python installations and does not need to be installed via pip.
+
 Install dependencies:
 
 ```bash
-pip install h5py numpy matplotlib scipy Pillow 
+pip install -r requirements.txt
 ```
 
 ---
