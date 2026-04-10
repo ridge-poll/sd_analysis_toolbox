@@ -28,6 +28,7 @@ from matplotlib.figure import Figure
 
 from utils import LRUCache, CACHE_SIZE
 from ephys_file import EphysFile
+from spectrogram import compute_spectrogram, ac_channel_index, SpectrogramResult
 
 # ── tuneable defaults ─────────────────────────────────────────────────────────
 DEFAULT_WINDOW_SEC = 10
@@ -55,13 +56,18 @@ class EphysPanel(tk.Frame):
     def __init__(self, parent, on_file_loaded=None, **kwargs):
         super().__init__(parent, **kwargs)
 
-        self._ef:            EphysFile | None = None
-        self._cache:         LRUCache         = LRUCache(CACHE_SIZE)
-        self._t_offset:      float            = 0.0        # current window left edge (s)
-        self._ylimits:       list             = []
-        self._axes:          list             = []
-        self._lines:         list             = []
-        self._display_mode:  str              = "traces"   # "traces" | "spectrogram"
+        self._ef:            EphysFile | None       = None
+        self._cache:         LRUCache               = LRUCache(CACHE_SIZE)
+        self._t_offset:      float                  = 0.0
+        self._ylimits:       list                   = []
+        self._axes:          list                   = []
+        self._lines:         list                   = []
+        self._display_mode:  str                    = "traces"
+
+        # spectrogram state
+        self._spec_result:   SpectrogramResult | None = None   # last computed result
+        self._spec_img                                = None    # AxesImage handle
+        self._spec_needs_compute: bool               = True    # stale flag
 
         self._on_file_loaded = on_file_loaded
 
@@ -96,6 +102,8 @@ class EphysPanel(tk.Frame):
         self._sweep_var.set(self._ef.sweeps[0])
 
         self._ylimits = self._ef.scan_ylimits(self._ef.sweeps[0])
+        self._spec_result        = None
+        self._spec_needs_compute = True
         self._rebuild_axes()
         self._build_yaxis_panel()
 
@@ -138,7 +146,7 @@ class EphysPanel(tk.Frame):
         tb = tk.Frame(self, bd=1, relief=tk.RAISED)
         tb.pack(side=tk.TOP, fill=tk.X, padx=4, pady=2)
 
-        tk.Button(tb, text="Open…", command=self._open_file
+        tk.Button(tb, text="Open Ephys…", command=self._open_file
                   ).pack(side=tk.LEFT, padx=2)
 
         tk.Label(tb, text="Sweep:").pack(side=tk.LEFT, padx=(8, 1))
@@ -162,11 +170,16 @@ class EphysPanel(tk.Frame):
                    textvariable=self._cache_size_var,
                    command=self._on_cache_resize).pack(side=tk.LEFT)
 
-        # display mode toggle — stub for future spectrogram
+        # display mode toggle — enabled now that spectrogram is implemented
         self._mode_btn = tk.Button(
-            tb, text="Spectrogram", state=tk.DISABLED,
+            tb, text="Spectrogram",
             command=self._toggle_display_mode)
         self._mode_btn.pack(side=tk.RIGHT, padx=6)
+
+        # compute button — only visible in spectrogram mode
+        self._compute_btn = tk.Button(
+            tb, text="Compute", command=self._on_compute_spectrogram)
+        # not packed yet — shown/hidden by _toggle_display_mode
 
         self._info_var = tk.StringVar(value="No file loaded.")
         tk.Label(tb, textvariable=self._info_var, fg="gray"
@@ -287,13 +300,82 @@ class EphysPanel(tk.Frame):
         self._mpl_canvas.draw_idle()
 
     def _redraw_spectrogram(self):
-        # ── stub: implement spectrogram rendering here ─────────────────────
-        # When implemented:
-        #   1. Fetch the same chunk as _redraw_traces()
-        #   2. Compute spectrogram (e.g. scipy.signal.spectrogram)
-        #   3. Use ax.imshow() or pcolormesh() instead of line.set_data()
-        #   4. Toggle button label should read "Traces" when in this mode
-        pass
+        """
+        Render the cached spectrogram result as a pcolormesh.
+        If no result is cached yet, show a prompt message instead.
+        The spectrogram is NOT recomputed automatically — the user must
+        press Compute to trigger _on_compute_spectrogram().
+        """
+        self._fig.clear()
+        ax = self._fig.add_subplot(1, 1, 1)
+
+        if self._spec_result is None:
+            ax.text(0.5, 0.5, "Press  Compute  to generate spectrogram",
+                    ha="center", va="center", transform=ax.transAxes,
+                    fontsize=11, color="gray")
+            ax.set_axis_off()
+            self._mpl_canvas.draw_idle()
+            return
+
+        r = self._spec_result
+        # absolute time axis
+        t_abs = r.t_start + r.times
+
+        ax.pcolormesh(t_abs, r.freqs, r.power_db,
+                      shading="auto", cmap="inferno")
+        ax.set_ylabel("Frequency (Hz)", fontsize=9)
+        ax.set_xlabel("Time (s)", fontsize=9)
+        ax.set_ylim(r.freq_min, r.freq_max)
+        ax.set_title(
+            f"AC channel spectrogram  |  "
+            f"window={r.nperseg} samples  |  "
+            f"overlap={r.noverlap} samples  |  "
+            f"{r.freq_min:.0f}–{r.freq_max:.0f} Hz",
+            fontsize=8)
+
+        self._mpl_canvas.draw_idle()
+
+    def _on_compute_spectrogram(self):
+        """
+        Fetch the full AC channel signal for the current sweep and window,
+        compute the spectrogram, cache the result, and redraw.
+        """
+        if not self._ef:
+            return
+
+        sweep  = self._sweep_var.get()
+        sr     = self._ef.sample_rate
+        win    = self._window_var.get()
+        t0     = self._t_offset
+        start  = int(t0 * sr)
+        stop   = min(int((t0 + win) * sr), self._ef.n_samples)
+
+        ac_idx = ac_channel_index(self._ef.n_channels)
+        signal = self._get_chunk(sweep, ac_idx, start, stop)
+
+        self._spec_result        = compute_spectrogram(signal, sr, t_start=t0)
+        self._spec_needs_compute = False
+        self._redraw_spectrogram()
+
+    # =========================================================================
+    # Event handlers / settings
+    # =========================================================================
+
+    def _toggle_display_mode(self):
+        if self._display_mode == "traces":
+            self._display_mode = "spectrogram"
+            self._mode_btn.config(text="Traces")
+            self._compute_btn.pack(side=tk.RIGHT, padx=(0, 2))
+            # hide y-range panel — not meaningful for spectrogram
+            self._yframe.pack_forget()
+            self._redraw_spectrogram()
+        else:
+            self._display_mode = "traces"
+            self._mode_btn.config(text="Spectrogram")
+            self._compute_btn.pack_forget()
+            self._yframe.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=1)
+            self._rebuild_axes()
+            self._redraw_traces()
 
     # =========================================================================
     # Data retrieval
@@ -331,23 +413,10 @@ class EphysPanel(tk.Frame):
         if not self._ef:
             return
         self._cache.clear()
-        self._ylimits  = self._ef.scan_ylimits(self._sweep_var.get())
-        self._t_offset = 0.0
+        self._ylimits            = self._ef.scan_ylimits(self._sweep_var.get())
+        self._t_offset           = 0.0
+        self._spec_result        = None
+        self._spec_needs_compute = True
         self._rebuild_axes()
         self._build_yaxis_panel()
-        self._redraw()
-
-    def _toggle_display_mode(self):
-        """
-        Toggle between traces and spectrogram views.
-        Spectrogram is currently disabled (button state=DISABLED).
-        To enable: set self._mode_btn state to NORMAL once _redraw_spectrogram
-        is implemented, and update button label accordingly.
-        """
-        if self._display_mode == "traces":
-            self._display_mode = "spectrogram"
-            self._mode_btn.config(text="Traces")
-        else:
-            self._display_mode = "traces"
-            self._mode_btn.config(text="Spectrogram")
         self._redraw()
