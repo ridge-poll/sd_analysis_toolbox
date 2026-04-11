@@ -2,7 +2,8 @@
 
 A synchronized viewer for HDF5 electrophysiology recordings and TIFF image stacks. Both data streams are displayed side by side and played together on a single shared timeline.
 
----
+![GUI screenshot](assets/demo_screenshot.png)
+
 
 ## Requirements
 
@@ -134,11 +135,14 @@ The offset accounts for the fact that the ephys and TIFF recordings may not have
 
 ## Extending
 
-**Adding spectrogram support:**
-1. Implement `EphysPanel._redraw_spectrogram()` in `ephys_panel.py`
-2. Change the Spectrogram button state from `tk.DISABLED` to `tk.NORMAL`
+**Multi-sweep behavior:**
+Sweep selection logic is handled in `ephys_file.py`. To support concatenated sweeps or continuous mode, adjust how sweep boundaries are detected and exposed to the sync controller. 
 
-The toggle logic, display mode state, and data-fetching path are already in place.
+**Highly parallel arrays:**
+Depending on the presence or lack of TIFF stacks (e.g. if only given ephys), may need to be another tool. Though spatiotemporal data combined with many electrodes would provide extremely valuable information if collected.
 
 **Changing TIFF frame rate:**
 The `frame_rate` parameter on `TiffPanel` (set in `main_gui.py`) controls how many TIFF frames correspond to one second of real time. Currently `1.0`.
+
+**Adding new visualization panels:**
+New modalities (e.g., event markers, spike detection, calcium traces) should follow the same pattern of panel class, data loader, and sync controller for shared time alignment.
