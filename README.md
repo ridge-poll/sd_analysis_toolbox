@@ -2,8 +2,9 @@
 
 A synchronized viewer for HDF5 electrophysiology recordings and TIFF image stacks. Both data streams are displayed side by side and played together on a single shared timeline.
 
-![GUI screenshot](assets/demo_screenshot.png)
-
+## Visual Overview
+![Trace view](assets/traces_screenshot.png)
+*Example trace view from the ephys panel showing raw voltage activity synchronized with the TIFF stream. Top channel shows low-frequency (DC) activity, bottom channel shows high-frequency (AC) activity.*
 
 ## Requirements
 
@@ -104,12 +105,24 @@ sd_analysis_toolbox/
 |---|---|
 | **◀◀ / ▶▶** | Step backward or forward by half the current ephys window width. |
 | **▶ Play / ⏸ Pause** | Start and stop synchronized playback across both panels. |
-| **Speed** | Playback speed multiplier: `0.25x`, `0.5x`, `1x`, `2x`, `4x`. |
+| **Speed** | Playback speed multiplier: `0.25x`, `0.5x`, `1x`, `2x`, `4x`, `8x`, `16x`. |
 | **TIFF offset (s)** | Temporal offset between the two recordings (see below). Press **Enter** or click away to apply. |
 | **Scrubber** | Drag to jump to any point in the recording. Driven by the ephys timeline in seconds. |
 | **Time display** | Current playback position in seconds. |
 
 ---
+
+## Spectrogram Overview
+
+The ephys panel can switch between a raw voltage trace and a spectrogram (a frequency-based representation of the same signal).
+
+A spectrogram shows how the frequency content of the signal changes over time. It is useful for identifying patterns such as rhythms and transient events that are difficult to see in the raw trace.
+
+- X-axis: time  
+- Y-axis: frequency (Hz)  
+- Color: signal strength at each frequency  
+
+![Spectrogram view](assets/spectrogram_screenshot.png)
 
 ## TIFF Offset
 
@@ -133,16 +146,13 @@ The offset accounts for the fact that the ephys and TIFF recordings may not have
 
 ---
 
-## Extending
+## Future development
 
 **Multi-sweep behavior:**
-Sweep selection logic is handled in `ephys_file.py`. To support concatenated sweeps or continuous mode, adjust how sweep boundaries are detected and exposed to the sync controller. 
+Sweep selection logic is currently handled in `ephys_file.py`. To support concatenated sweeps or continuous mode, will need to adjust how sweep boundaries are detected and exposed to the sync controller. 
 
 **Highly parallel arrays:**
-Depending on the presence or lack of TIFF stacks (e.g. if only given ephys), may need to be another tool. Though spatiotemporal data combined with many electrodes would provide extremely valuable information if collected.
-
-**Changing TIFF frame rate:**
-The `frame_rate` parameter on `TiffPanel` (set in `main_gui.py`) controls how many TIFF frames correspond to one second of real time. Currently `1.0`.
+Depending on the presence or lack of TIFF stacks (e.g. if only given ephys data), may need to be another tool. Though spatiotemporal data combined with many electrodes would provide extremely valuable information if collected.
 
 **Adding new visualization panels:**
 New modalities (e.g., event markers, spike detection, calcium traces) should follow the same pattern of panel class, data loader, and sync controller for shared time alignment.
