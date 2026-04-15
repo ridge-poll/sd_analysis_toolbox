@@ -12,7 +12,7 @@ Layout:
   │    (image)           │      (traces)                │
   │                      │                              │
   ├──────────────────────┴──────────────────────────────┤
-  │  ◀◀  ▶ Play  ▶▶  Speed:[1x]  Offset:[__]s  0.00 s  │  sync controls
+  │  ◀◀  ▶ Play  ▶▶  Speed:[1x]  Offset:[__]s  0.00 s   │  sync controls
   └─────────────────────────────────────────────────────┘
 
 Usage:
@@ -24,9 +24,11 @@ import sys
 import tkinter as tk
 from tkinter import ttk
 
-from ephys_panel import EphysPanel
-from tiff_panel import TiffPanel
-from sync_controller import SyncController
+from sd_viewer.ephys_panel import EphysPanel
+from sd_viewer.tiff_panel import TiffPanel
+from sd_viewer.sync_controller import SyncController
+from models.session import Session
+from annotation_io.export_annotations import save_json, apply_loaded_annotations
 
 # ── tuneable defaults ─────────────────────────────────────────────────────────
 DEFAULT_OFFSET   = 0.0    # seconds (ephys t=0 → TIFF t=0 by default)
@@ -44,6 +46,8 @@ class MainApp(tk.Tk):
         self.title("Ephys + TIFF Sync Viewer")
         self.geometry(f"{WIN_WIDTH}x{WIN_HEIGHT}")
         self.resizable(True, True)
+
+        self._session = Session()
 
         self._build_ui()
         self._wire_controller()
@@ -148,12 +152,16 @@ class MainApp(tk.Tk):
         self._slider.configure(to=ef.duration)
         self._slider_var.set(0.0)
         self._time_var.set("0.00 s")
+        self._session.ephys_path = ef.path
 
     def _on_tiff_loaded(self, n_frames, frame_rate):
         """Called by TiffPanel after a folder loads."""
         # Nothing to do here currently — timeline is driven by ephys duration.
         # Could extend to warn if TIFF duration + offset exceeds ephys duration.
         pass
+        # NOTE: TiffPanel will need to expose its folder path for the line below.
+        # Uncomment once tiff_panel.py exposes self._folder or similar:
+        # self._session.tiff_folder = self._tiff_panel.folder_path
 
     # =========================================================================
     # Sync controls
@@ -204,6 +212,7 @@ class MainApp(tk.Tk):
         try:
             offset = float(self._offset_var.get())
             self._ctrl.set_offset(offset)
+            self._session.tiff_offset = offset
         except ValueError:
             pass
 

@@ -20,7 +20,7 @@ from tkinter import filedialog, messagebox
 
 from PIL import ImageTk
 
-from utils import LRUCache, CACHE_SIZE, MAX_DISPLAY_PX, natural_sort_key, load_and_downsample
+from sd_viewer.utils import LRUCache, CACHE_SIZE, MAX_DISPLAY_PX, natural_sort_key, load_and_downsample
 
 
 class TiffPanel(tk.Frame):

@@ -26,9 +26,9 @@ matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-from utils import LRUCache, CACHE_SIZE
-from ephys_file import EphysFile
-from spectrogram import compute_spectrogram, ac_channel_index
+from sd_viewer.utils import LRUCache, CACHE_SIZE
+from sd_viewer.ephys_file import EphysFile
+from sd_viewer.spectrogram import compute_spectrogram, ac_channel_index
 
 # ── tuneable defaults ─────────────────────────────────────────────────────────
 DEFAULT_WINDOW_SEC = 10
