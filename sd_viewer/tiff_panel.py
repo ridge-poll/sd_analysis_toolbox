@@ -44,6 +44,7 @@ class TiffPanel(tk.Frame):
         super().__init__(parent, **kwargs)
 
         self._paths:      list[str]              = []
+        self._folder_path: str | None            = None
         self._cache:      LRUCache               = LRUCache(CACHE_SIZE)
         self._tk_image:   ImageTk.PhotoImage | None = None
         self._frame_idx:  int                    = -1   # -1 = nothing shown yet
@@ -59,6 +60,7 @@ class TiffPanel(tk.Frame):
 
     def load_folder(self, path: str):
         """Load all TIFFs from a folder. Safe to call multiple times."""
+        self._folder_path = path
         paths = [
             os.path.join(path, f)
             for f in os.listdir(path)
@@ -99,13 +101,18 @@ class TiffPanel(tk.Frame):
     @property
     def n_frames(self) -> int:
         return len(self._paths)
-
+    
     @property
     def duration(self) -> float:
         """Total duration of the TIFF stack in seconds."""
         if not self._paths:
             return 0.0
         return len(self._paths) / self._frame_rate
+
+    @property
+    def folder_path(self) -> str | None:
+        """Absolute path of the currently loaded TIFF folder, or None."""
+        return self._folder_path
 
     # =========================================================================
     # UI construction

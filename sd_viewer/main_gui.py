@@ -29,6 +29,9 @@ from sd_viewer.tiff_panel import TiffPanel
 from sd_viewer.sync_controller import SyncController
 from models.session import Session
 from annotation_io.export_annotations import save_json, apply_loaded_annotations
+from sd_viewer.timeline_panel import TimelinePanel
+from sd_viewer.event_list_panel import EventListPanel
+from tkinter import filedialog
 
 # ── tuneable defaults ─────────────────────────────────────────────────────────
 DEFAULT_OFFSET   = 0.0    # seconds (ephys t=0 → TIFF t=0 by default)
@@ -48,7 +51,7 @@ class MainApp(tk.Tk):
         self.resizable(True, True)
 
         self._session = Session()
-
+        self._build_menu()
         self._build_ui()
         self._wire_controller()
 
@@ -62,10 +65,25 @@ class MainApp(tk.Tk):
     # UI construction
     # =========================================================================
 
+    def _build_menu(self):
+        menubar = tk.Menu(self)
+        file_menu = tk.Menu(menubar, tearoff=0)
+        file_menu.add_command(label="Save Annotations…",
+                                command=self._save_annotations,
+                                accelerator="Ctrl+S")
+        file_menu.add_command(label="Load Annotations…",
+                                command=self._load_annotations)
+        menubar.add_cascade(label="Annotations", menu=file_menu)
+        self.configure(menu=menubar)
+        self.bind_all("<Control-s>", lambda _: self._save_annotations())
+
     def _build_ui(self):
+        # ── menu bar ───────────────────────────────────────────────────────
+        # (built separately in _build_menu, called before _build_ui)
+
         # ── main paned area ────────────────────────────────────────────────
         paned = tk.PanedWindow(self, orient=tk.HORIZONTAL, sashrelief=tk.RAISED,
-                               sashwidth=5)
+                            sashwidth=5)
         paned.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=4, pady=4)
 
         self._tiff_panel = TiffPanel(
@@ -81,34 +99,52 @@ class MainApp(tk.Tk):
             bd=1, relief=tk.SUNKEN)
         paned.add(self._ephys_panel, minsize=300)
 
-        # give ephys panel more initial space
         self.update_idletasks()
         paned.sash_place(0, int(WIN_WIDTH * 0.38), 0)
+
+        # ── timeline strip  ← NEW ─────────────────────────────────────────
+        self._timeline_panel = TimelinePanel(
+            self,
+            session=self._session,
+            on_event_added=self._on_event_change,
+            on_event_removed=self._on_event_change,
+            on_event_updated=self._on_event_change,
+            bd=1, relief=tk.SUNKEN,
+        )
+        self._timeline_panel.pack(side=tk.TOP, fill=tk.X, padx=4, pady=(0, 2))
+
+        # ── event list  ← NEW ────────────────────────────────────────────
+        self._event_list = EventListPanel(
+            self,
+            session=self._session,
+            on_event_removed=self._on_event_change,
+            on_event_selected=self._on_event_selected,
+            bd=1, relief=tk.SUNKEN,
+        )
+        self._event_list.pack(side=tk.TOP, fill=tk.X, padx=4, pady=(0, 2))
 
         # ── bottom sync controls ───────────────────────────────────────────
         ctrl = tk.Frame(self, bd=1, relief=tk.RAISED)
         ctrl.pack(side=tk.BOTTOM, fill=tk.X, padx=4, pady=2)
 
         tk.Button(ctrl, text="◀◀", width=3,
-                  command=self._step_back).pack(side=tk.LEFT, padx=2)
+                command=self._step_back).pack(side=tk.LEFT, padx=2)
 
         self._play_btn = tk.Button(ctrl, text="▶  Play", width=8,
-                                   command=self._toggle_play)
+                                command=self._toggle_play)
         self._play_btn.pack(side=tk.LEFT, padx=2)
 
         tk.Button(ctrl, text="▶▶", width=3,
-                  command=self._step_fwd).pack(side=tk.LEFT, padx=2)
+                command=self._step_fwd).pack(side=tk.LEFT, padx=2)
 
-        # speed selector
         tk.Label(ctrl, text="  Speed:").pack(side=tk.LEFT, padx=(8, 2))
         self._speed_var = tk.StringVar(value="1x")
         speed_menu = ttk.Combobox(ctrl, textvariable=self._speed_var,
-                                  values=[f"{s}x" for s in SPEED_OPTIONS],
-                                  state="readonly", width=5)
+                                values=[f"{s}x" for s in SPEED_OPTIONS],
+                                state="readonly", width=5)
         speed_menu.pack(side=tk.LEFT)
         speed_menu.bind("<<ComboboxSelected>>", self._on_speed_change)
 
-        # TIFF offset
         tk.Label(ctrl, text="  TIFF offset (s):").pack(side=tk.LEFT, padx=(12, 2))
         self._offset_var = tk.StringVar(value=str(DEFAULT_OFFSET))
         offset_entry = tk.Entry(ctrl, textvariable=self._offset_var, width=8)
@@ -116,17 +152,15 @@ class MainApp(tk.Tk):
         offset_entry.bind("<Return>",   self._apply_offset)
         offset_entry.bind("<FocusOut>", self._apply_offset)
 
-        # current-time label (right side)
         self._time_var = tk.StringVar(value="0.00 s")
         tk.Label(ctrl, textvariable=self._time_var, width=12
-                 ).pack(side=tk.RIGHT, padx=6)
+                ).pack(side=tk.RIGHT, padx=6)
 
-        # shared scrubber
         self._slider_var = tk.DoubleVar(value=0.0)
         self._slider = ttk.Scale(self, from_=0.0, to=1.0,
-                                 orient=tk.HORIZONTAL,
-                                 variable=self._slider_var,
-                                 command=self._on_slider)
+                                orient=tk.HORIZONTAL,
+                                variable=self._slider_var,
+                                command=self._on_slider)
         self._slider.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=(0, 2))
 
     # =========================================================================
@@ -147,21 +181,17 @@ class MainApp(tk.Tk):
     # =========================================================================
 
     def _on_ephys_loaded(self, ef):
-        """Called by EphysPanel after a file loads. Update shared timeline."""
         self._ctrl.set_max_time(ef.duration)
         self._slider.configure(to=ef.duration)
         self._slider_var.set(0.0)
         self._time_var.set("0.00 s")
         self._session.ephys_path = ef.path
+        self._timeline_panel.set_max_time(ef.duration)
+        self._event_list.refresh()
 
     def _on_tiff_loaded(self, n_frames, frame_rate):
         """Called by TiffPanel after a folder loads."""
-        # Nothing to do here currently — timeline is driven by ephys duration.
-        # Could extend to warn if TIFF duration + offset exceeds ephys duration.
-        pass
-        # NOTE: TiffPanel will need to expose its folder path for the line below.
-        # Uncomment once tiff_panel.py exposes self._folder or similar:
-        # self._session.tiff_folder = self._tiff_panel.folder_path
+        self._session.tiff_folder = self._tiff_panel.folder_path
 
     # =========================================================================
     # Sync controls
@@ -194,10 +224,9 @@ class MainApp(tk.Tk):
             self._ctrl.seek(t)
 
     def _on_tick(self, t: float):
-        """Called by SyncController on every playback tick."""
         self._slider_var.set(t)
         self._time_var.set(f"{t:.2f} s")
-        # if playback reached the end, reset button label
+        self._timeline_panel.update_cursor(t)   # ← add
         if not self._ctrl.is_playing:
             self._play_btn.config(text="▶  Play")
 
@@ -215,6 +244,47 @@ class MainApp(tk.Tk):
             self._session.tiff_offset = offset
         except ValueError:
             pass
+    
+    def _on_event_change(self, event=None):
+        """Called by timeline panel or event list after any mutation."""
+        self._timeline_panel.refresh()
+        self._event_list.refresh()
+
+    def _on_event_selected(self, event):
+        """Seek playhead to the start of the selected event."""
+        self._ctrl.seek(event.start_time)
+
+    def _save_annotations(self):
+        from tkinter import filedialog
+        path = filedialog.asksaveasfilename(
+            title="Save Annotations",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            save_json(self._session, path)
+        except OSError as e:
+            from tkinter import messagebox
+            messagebox.showerror("Save failed", str(e))
+
+    def _load_annotations(self):
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            title="Load Annotations",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            n, _ = apply_loaded_annotations(self._session, path)
+            self._on_event_change()
+            from tkinter import messagebox
+            messagebox.showinfo("Loaded", f"{n} event(s) loaded.")
+        except (ValueError, OSError) as e:
+            from tkinter import messagebox
+            messagebox.showerror("Load failed", str(e))
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
