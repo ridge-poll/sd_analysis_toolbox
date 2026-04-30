@@ -3,45 +3,54 @@ utils.py
 --------
 Shared utilities for the ephys+TIFF sync viewer.
 """
-
 import os
 import re
+import threading
 from collections import OrderedDict
 from PIL import Image
 
 # ── tuneable constants ────────────────────────────────────────────────────────
 MAX_DISPLAY_PX = 768   # longest side of downsampled TIFF display image (pixels)
-CACHE_SIZE     = 30    # default LRU cache size (frames or chunks)
+CACHE_SIZE     = 60    # default LRU cache size — increased to support high-speed lookahead
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class LRUCache:
-    """Fixed-size LRU cache backed by an OrderedDict."""
+    """Fixed-size LRU cache backed by an OrderedDict. Thread-safe."""
 
     def __init__(self, capacity: int):
         self._cap   = capacity
         self._store = OrderedDict()
+        self._lock  = threading.Lock()
 
     def get(self, key):
-        if key not in self._store:
-            return None
-        self._store.move_to_end(key)
-        return self._store[key]
+        with self._lock:
+            if key not in self._store:
+                return None
+            self._store.move_to_end(key)
+            return self._store[key]
 
     def put(self, key, value):
-        if key in self._store:
-            self._store.move_to_end(key)
-        self._store[key] = value
-        if len(self._store) > self._cap:
-            self._store.popitem(last=False)
+        with self._lock:
+            if key in self._store:
+                self._store.move_to_end(key)
+            self._store[key] = value
+            if len(self._store) > self._cap:
+                self._store.popitem(last=False)
+
+    def contains(self, key) -> bool:
+        with self._lock:
+            return key in self._store
 
     def clear(self):
-        self._store.clear()
+        with self._lock:
+            self._store.clear()
 
     def resize(self, new_capacity: int):
-        self._cap = max(1, new_capacity)
-        while len(self._store) > self._cap:
-            self._store.popitem(last=False)
+        with self._lock:
+            self._cap = max(1, new_capacity)
+            while len(self._store) > self._cap:
+                self._store.popitem(last=False)
 
 
 def natural_sort_key(path: str):

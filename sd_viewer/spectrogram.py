@@ -17,9 +17,10 @@ from scipy.signal import spectrogram as scipy_spectrogram
 
 
 # ── tuneable defaults ─────────────────────────────────────────────────────────
-DEFAULT_NPERSEG  = 1024   # FFT window length (samples). At 10kHz → 102.4 ms per window
+# DEFAULT_NPERSEG  = 1024   # FFT window length (samples). At 10kHz → 102.4 ms per window
+DEFAULT_NPERSEG  = 16384   # FFT window length (samples). At 10kHz → 102.4 ms per window
 DEFAULT_NOVERLAP = 768    # 75% overlap — smooth time axis without excess cost
-DEFAULT_FREQ_MAX = 300.0  # Hz — LFP range ceiling
+DEFAULT_FREQ_MAX = 500.0  # Hz — LFP range ceiling
 DEFAULT_FREQ_MIN = 0.0    # Hz
 EPSILON          = 1e-12  # prevents log(0)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -35,7 +36,7 @@ class SpectrogramResult:
     freqs     : 1-D array of frequency bin centres (Hz)
     times     : 1-D array of time bin centres (s), relative to the start of
                 the signal slice that was passed in
-    power_db  : 2-D array (freqs × times) of power in dB
+    power_db  : 2-D array (freqs x times) of power in dB
     t_start   : ephys timeline time (s) of the first sample in the slice —
                 add to `times` to get absolute ephys timestamps
     nperseg   : FFT window length used
