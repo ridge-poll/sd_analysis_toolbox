@@ -10,6 +10,7 @@ Key design points:
     CPU decompression are fully pipelined. Lookahead scales with playback speed.
   - frame_rate: how many TIFF frames per second of real time (default 1.0)
   - Only redraws when the frame index actually changes (no wasted work)
+  - Optional percentile contrast normalization (1st–99th pct, NumPy, subsampled)
 
 Public API (called by SyncController / main_gui):
     panel.load_folder(path)
@@ -25,15 +26,20 @@ from concurrent.futures import ThreadPoolExecutor, Future
 
 from PIL import ImageTk
 
-from utils import LRUCache, CACHE_SIZE, MAX_DISPLAY_PX, natural_sort_key, load_and_downsample
+from utils import (
+    LRUCache, CACHE_SIZE, MAX_DISPLAY_PX,
+    natural_sort_key, load_and_downsample,
+    normalize_percentile,               # ← new import
+)
 
-# Number of parallel loader threads. Diminishing returns above ~4 for local
-# SSDs; HDD users may benefit from 2. More threads = more RAM in flight.
 WORKER_THREADS = 4
-
-# How many frames ahead to buffer at 1x. Scales linearly with speed.
 BASE_PREFETCH  = 16
 MAX_PREFETCH   = 128
+
+# Percentile bounds for contrast normalization.
+# Exposed as module-level constants so callers / tests can override easily.
+NORM_LOW_PCT  = 1.0
+NORM_HIGH_PCT = 99.0
 
 
 class TiffPanel(tk.Frame):
@@ -47,10 +53,12 @@ class TiffPanel(tk.Frame):
         TIFF frames per second of real time.
     on_folder_loaded : callable, optional
         Called with (n_frames, frame_rate) after a folder is loaded.
+    normalize : bool
+        Start with percentile contrast normalization enabled.
     """
 
     def __init__(self, parent, frame_rate: float = 1.0,
-                 on_folder_loaded=None, **kwargs):
+                 on_folder_loaded=None, normalize: bool = True, **kwargs):
         super().__init__(parent, **kwargs)
 
         self._paths:       list[str]                 = []
@@ -61,16 +69,17 @@ class TiffPanel(tk.Frame):
         self._speed:       float                     = 1.0
         self._canvas_item: int | None                = None
 
+        # ── contrast normalization ─────────────────────────────────────────
+        # Driven by a tk.BooleanVar so the checkbox and internal logic stay
+        # in sync automatically.
+        self._norm_var = tk.BooleanVar(value=normalize)
+
         self._on_folder_loaded = on_folder_loaded
 
-        # ── thread pool ───────────────────────────────────────────────────
-        # Shared executor — workers are reused across folders.
         self._executor = ThreadPoolExecutor(
             max_workers=WORKER_THREADS, thread_name_prefix="tiff-load"
         )
 
-        # Tracks in-flight futures so we don't submit the same index twice.
-        # Maps frame index → Future. Guarded by _futures_lock.
         self._futures:      dict[int, Future] = {}
         self._futures_lock: threading.Lock    = threading.Lock()
 
@@ -94,7 +103,6 @@ class TiffPanel(tk.Frame):
 
         paths.sort(key=natural_sort_key)
 
-        # Cancel in-flight work for the old folder.
         with self._futures_lock:
             for fut in self._futures.values():
                 fut.cancel()
@@ -126,10 +134,7 @@ class TiffPanel(tk.Frame):
             self._submit_prefetch(idx)
 
     def set_speed(self, multiplier: float):
-        """
-        Notify of current playback speed so prefetch depth scales accordingly.
-        Called by SyncController whenever speed changes.
-        """
+        """Notify of current playback speed so prefetch depth scales."""
         self._speed = max(1.0, multiplier)
         if self._frame_idx >= 0:
             self._submit_prefetch(self._frame_idx)
@@ -163,6 +168,16 @@ class TiffPanel(tk.Frame):
         tk.Label(tb, textvariable=self._counter_var
                  ).pack(side=tk.RIGHT, padx=6)
 
+        # ── contrast normalisation toggle ──────────────────────────────────
+        # Placed on the right side of the toolbar, before the frame counter.
+        tk.Checkbutton(
+            tb,
+            text="Normalize",
+            variable=self._norm_var,
+            command=self._on_norm_toggled,   # flush cache & redraw on change
+        ).pack(side=tk.RIGHT, padx=4)
+        # ──────────────────────────────────────────────────────────────────
+
         self._canvas = tk.Canvas(self, bg="black", width=MAX_DISPLAY_PX)
         self._canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
@@ -172,30 +187,38 @@ class TiffPanel(tk.Frame):
 
     def _get_frame(self, idx: int):
         """
-        Return the PIL image for frame idx.
+        Return the (possibly normalized) PIL image for frame idx.
 
-        Checks the cache first. If there's an in-flight future for this index,
-        blocks briefly to collect it (it's probably nearly done). Otherwise
-        falls back to a synchronous load on the main thread.
+        Checks cache first, then any in-flight future, then loads
+        synchronously as a last resort.
         """
         img = self._cache.get(idx)
         if img is not None:
             return img
 
-        # Check if a worker is already loading this frame.
         with self._futures_lock:
             fut = self._futures.get(idx)
 
         if fut is not None:
             try:
-                img = fut.result(timeout=2.0)   # wait up to 2s for the worker
+                img = fut.result(timeout=2.0)
                 return img
             except Exception:
-                pass   # worker failed — fall through to synchronous load
+                pass
 
-        # Last resort: load synchronously (should be rare after warm-up).
-        img = load_and_downsample(self._paths[idx])
+        # Synchronous fallback (rare after warm-up).
+        img = self._process_frame(self._paths[idx])
         self._cache.put(idx, img)
+        return img
+
+    def _process_frame(self, path: str):
+        """
+        Load one frame from disk and apply contrast normalization if enabled.
+        Called from both worker threads and (rarely) the main thread.
+        """
+        img = load_and_downsample(path)
+        if self._norm_var.get():
+            img = normalize_percentile(img, NORM_LOW_PCT, NORM_HIGH_PCT)
         return img
 
     def _show_frame(self, idx: int):
@@ -227,24 +250,21 @@ class TiffPanel(tk.Frame):
 
     def _load_frame_worker(self, idx: int):
         """
-        Worker function: load one frame and store it in the cache.
-        Runs inside the ThreadPoolExecutor — never on the main thread.
+        Worker: load + (optionally) normalize one frame, then cache it.
+        Runs in the ThreadPoolExecutor — never on the main thread.
         """
-        # Re-check cache here too — another worker may have beat us to it.
         if self._cache.get(idx) is not None:
             return self._cache.get(idx)
-        img = load_and_downsample(self._paths[idx])
+
+        img = self._process_frame(self._paths[idx])
         self._cache.put(idx, img)
-        # Clean up the futures dict once done.
+
         with self._futures_lock:
             self._futures.pop(idx, None)
         return img
 
     def _submit_prefetch(self, current_idx: int):
-        """
-        Submit load jobs for the next LOOKAHEAD frames, skipping any that are
-        already cached or already being loaded.
-        """
+        """Submit load jobs for the next LOOKAHEAD frames."""
         lookahead = min(int(BASE_PREFETCH * self._speed), MAX_PREFETCH)
         n = len(self._paths)
 
@@ -253,13 +273,39 @@ class TiffPanel(tk.Frame):
                 nxt = current_idx + offset
                 if nxt >= n:
                     break
-                # Skip if cached or already in flight.
                 if self._cache.get(nxt) is not None:
                     continue
                 if nxt in self._futures:
                     continue
                 fut = self._executor.submit(self._load_frame_worker, nxt)
                 self._futures[nxt] = fut
+
+    # =========================================================================
+    # Normalization toggle handler
+    # =========================================================================
+
+    def _on_norm_toggled(self):
+        """
+        Flush the cache and cancel in-flight work so all frames are
+        re-processed with the new normalization setting.
+        Re-display the current frame immediately.
+        """
+        if not self._paths:
+            return
+
+        # Cancel pending futures — they were loaded under the old setting.
+        with self._futures_lock:
+            for fut in self._futures.values():
+                fut.cancel()
+            self._futures.clear()
+
+        self._cache = LRUCache(CACHE_SIZE)
+
+        # Redisplay current frame (synchronously; cache is now empty).
+        current = max(0, self._frame_idx)
+        self._frame_idx = -1          # force _show_frame to treat it as new
+        self._show_frame(current)
+        self._submit_prefetch(current)
 
     # =========================================================================
     # Event handlers
