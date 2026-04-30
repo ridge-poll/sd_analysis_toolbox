@@ -7,7 +7,8 @@ Key design points:
   - No playback logic here — driven externally via show_at_time(t)
   - display_mode: "traces" | "spectrogram"
   - Traces: fast redraws via set_data() on pre-existing Line2D objects
-  - Spectrogram: computed fresh on every redraw (AC channel, 0-300 Hz, dB)
+  - Spectrogram: recomputed only when the window shifts by at least one
+    time-bin width; otherwise the cached image is reused (no FFT on every tick)
   - LRU chunk cache keyed by (sweep, ch_idx, start, stop)
 
 Public API (called by SyncController / main_gui):
@@ -28,7 +29,7 @@ from matplotlib.figure import Figure
 
 from utils import LRUCache, CACHE_SIZE
 from ephys_file import EphysFile
-from spectrogram import compute_spectrogram, ac_channel_index
+from spectrogram import compute_spectrogram, ac_channel_index, SpectrogramResult
 
 # ── tuneable defaults ─────────────────────────────────────────────────────────
 DEFAULT_WINDOW_SEC = 10
@@ -48,7 +49,6 @@ class EphysPanel(tk.Frame):
         Tkinter parent widget.
     on_file_loaded : callable, optional
         Called with (EphysFile) after a new file is successfully loaded.
-        Main GUI uses this to update the shared timeline/slider range.
     kwargs
         Passed to tk.Frame.
     """
@@ -63,6 +63,18 @@ class EphysPanel(tk.Frame):
         self._axes:         list             = []
         self._lines:        list             = []
         self._display_mode: str              = "traces"
+
+        # ── spectrogram cache ──────────────────────────────────────────────
+        # Recompute only when the window moves enough to show new content.
+        # _spec_result   : last computed SpectrogramResult (or None)
+        # _spec_t_offset : the t_offset it was computed at
+        # _spec_start    : sample index it was computed at
+        # _spec_stop     : sample index it was computed at
+        # Invalidated whenever sweep/window/decimate settings change.
+        self._spec_result:   SpectrogramResult | None = None
+        self._spec_t_offset: float = -1.0
+        self._spec_start:    int   = -1
+        self._spec_stop:     int   = -1
 
         self._on_file_loaded = on_file_loaded
 
@@ -85,6 +97,7 @@ class EphysPanel(tk.Frame):
         self._cache    = LRUCache(self._cache_size_var.get())
         self._ef       = EphysFile(path)
         self._t_offset = 0.0
+        self._invalidate_spec_cache()
 
         self._info_var.set(
             f"{os.path.basename(path)}  |  "
@@ -163,7 +176,6 @@ class EphysPanel(tk.Frame):
                    textvariable=self._cache_size_var,
                    command=self._on_cache_resize).pack(side=tk.LEFT)
 
-        # display mode toggle
         self._mode_btn = tk.Button(
             tb, text="Spectrogram", command=self._toggle_display_mode)
         self._mode_btn.pack(side=tk.RIGHT, padx=6)
@@ -172,7 +184,7 @@ class EphysPanel(tk.Frame):
         tk.Label(tb, textvariable=self._info_var, fg="gray"
                  ).pack(side=tk.RIGHT, padx=6)
 
-        # ── y-axis panel (rebuilt per file) ────────────────────────────────
+        # ── y-axis panel ────────────────────────────────────────────────────
         self._yframe = tk.Frame(self)
         self._yframe.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=1)
         self._yentries: list[tuple[tk.Entry, tk.Entry]] = []
@@ -182,8 +194,6 @@ class EphysPanel(tk.Frame):
         self._mpl_canvas = FigureCanvasTkAgg(self._fig, master=self)
         self._mpl_canvas.get_tk_widget().pack(
             side=tk.TOP, fill=tk.BOTH, expand=True)
-
-    # ── y-axis panel ──────────────────────────────────────────────────────
 
     def _build_yaxis_panel(self):
         for w in self._yframe.winfo_children():
@@ -287,9 +297,12 @@ class EphysPanel(tk.Frame):
 
     def _redraw_spectrogram(self):
         """
-        Compute and render the spectrogram for the current window.
-        Computed fresh on every call — fast enough for typical LFP windows.
-        Uses the AC channel (last active channel by convention).
+        Render the spectrogram for the current window.
+
+        The FFT is only recomputed when the sample range has actually changed
+        (i.e. the window has scrolled into new data). Between recomputations
+        the cached pcolormesh is redrawn instantly via draw_idle() with no
+        extra work — making this safe to call on every playback tick.
         """
         sweep  = self._sweep_var.get()
         sr     = self._ef.sample_rate
@@ -298,13 +311,23 @@ class EphysPanel(tk.Frame):
         start  = int(t0 * sr)
         stop   = min(int((t0 + win) * sr), self._ef.n_samples)
 
+        # Only recompute if the sample window has changed.
+        if start == self._spec_start and stop == self._spec_stop:
+            return   # cached result still valid — nothing to do
+
         ac_idx = ac_channel_index(self._ef.n_channels)
         signal = self._get_chunk(sweep, ac_idx, start, stop)
         r      = compute_spectrogram(signal, sr, t_start=t0)
 
+        # Store result and the window it corresponds to.
+        self._spec_result   = r
+        self._spec_t_offset = t0
+        self._spec_start    = start
+        self._spec_stop     = stop
+
+        # Rebuild the axes with the new data.
         self._fig.clear()
         ax = self._fig.add_subplot(1, 1, 1)
-
         t_abs = r.t_start + r.times
         ax.pcolormesh(t_abs, r.freqs, r.power_db, shading="auto", cmap="inferno")
         ax.set_ylabel("Frequency (Hz)", fontsize=9)
@@ -316,6 +339,17 @@ class EphysPanel(tk.Frame):
             fontsize=8)
 
         self._mpl_canvas.draw_idle()
+
+    # =========================================================================
+    # Spectrogram cache invalidation
+    # =========================================================================
+
+    def _invalidate_spec_cache(self):
+        """Force a recompute on the next spectrogram redraw."""
+        self._spec_result   = None
+        self._spec_t_offset = -1.0
+        self._spec_start    = -1
+        self._spec_stop     = -1
 
     # =========================================================================
     # Data retrieval
@@ -344,6 +378,7 @@ class EphysPanel(tk.Frame):
 
     def _on_settings_change(self, *_):
         if self._ef:
+            self._invalidate_spec_cache()
             self._redraw()
 
     def _on_cache_resize(self, *_):
@@ -353,6 +388,7 @@ class EphysPanel(tk.Frame):
         if not self._ef:
             return
         self._cache.clear()
+        self._invalidate_spec_cache()
         self._ylimits  = self._ef.scan_ylimits(self._sweep_var.get())
         self._t_offset = 0.0
         self._rebuild_axes()

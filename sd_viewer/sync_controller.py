@@ -27,8 +27,8 @@ Public API (called by main_gui):
 import time
 import tkinter as tk
 
-TICK_MS     = 30       # playback timer interval in milliseconds
-TICK_SEC    = TICK_MS / 1000.0
+TICK_MS       = 30       # target playback timer interval in milliseconds
+TICK_SEC      = TICK_MS / 1000.0
 DEFAULT_SPEED = 1.0
 
 
@@ -41,7 +41,7 @@ class SyncController:
     ephys_panel : EphysPanel
         Must implement show_at_time(t: float).
     tiff_panel : TiffPanel
-        Must implement show_at_time(t: float).
+        Must implement show_at_time(t: float) and set_speed(multiplier: float).
     tiff_offset : float
         Seconds into the ephys recording when the first TIFF frame was
         captured. Set once at startup; adjustable via set_offset().
@@ -54,7 +54,7 @@ class SyncController:
         self._tiff        = tiff_panel
         self._offset      = tiff_offset
 
-        self._t:          float = 0.0           # current time, ephys timeline (s)
+        self._t:          float = 0.0
         self._playing:    bool  = False
         self._speed:      float = DEFAULT_SPEED
         self._after_id:   str | None = None
@@ -63,10 +63,7 @@ class SyncController:
         self._play_start_wall:  float = 0.0
         self._play_start_t:     float = 0.0
 
-        # optional tick callback — main_gui registers this to update slider
         self._on_tick_cb = None
-
-        # max time is set when a file is loaded
         self._max_t: float = 0.0
 
     # =========================================================================
@@ -79,7 +76,7 @@ class SyncController:
         self._playing          = True
         self._play_start_wall  = time.monotonic()
         self._play_start_t     = self._t
-        self._schedule_tick()
+        self._schedule_tick(TICK_MS)
 
     def pause(self):
         self._playing = False
@@ -90,7 +87,6 @@ class SyncController:
     def seek(self, t: float):
         """Jump to time t (ephys seconds). Works during playback or pause."""
         self._t = max(0.0, min(t, self._max_t))
-        # reset drift reference so playback continues smoothly from new position
         self._play_start_wall = time.monotonic()
         self._play_start_t    = self._t
         self._update_panels()
@@ -105,6 +101,8 @@ class SyncController:
         self._speed           = max(0.1, multiplier)
         self._play_start_wall = time.monotonic()
         self._play_start_t    = self._t
+        # Tell the TIFF panel so it can scale its prefetch lookahead.
+        self._tiff.set_speed(self._speed)
 
     def set_max_time(self, max_t: float):
         """Called by main_gui when ephys file is loaded."""
@@ -129,16 +127,18 @@ class SyncController:
     # Internal playback loop
     # =========================================================================
 
-    def _schedule_tick(self):
-        self._after_id = self._root.after(TICK_MS, self._tick)
+    def _schedule_tick(self, delay_ms: int):
+        self._after_id = self._root.after(delay_ms, self._tick)
 
     def _tick(self):
         if not self._playing:
             return
 
+        tick_start = time.monotonic()
+
         # drift-corrected time: use wall clock rather than accumulated after() delays
-        elapsed   = (time.monotonic() - self._play_start_wall) * self._speed
-        new_t     = self._play_start_t + elapsed
+        elapsed = (tick_start - self._play_start_wall) * self._speed
+        new_t   = self._play_start_t + elapsed
 
         if new_t >= self._max_t:
             new_t         = self._max_t
@@ -149,7 +149,12 @@ class SyncController:
 
         self._t = new_t
         self._update_panels()
-        self._schedule_tick()
+
+        # Subtract the time spent in _update_panels so the next tick fires
+        # closer to the true target interval, preventing cumulative lag.
+        work_ms  = (time.monotonic() - tick_start) * 1000
+        delay_ms = max(1, round(TICK_MS - work_ms))
+        self._schedule_tick(delay_ms)
 
     def _update_panels(self):
         """Push current time to both panels and fire the tick callback."""
