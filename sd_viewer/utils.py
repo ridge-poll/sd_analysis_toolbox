@@ -7,6 +7,7 @@ import os
 import re
 import threading
 from collections import OrderedDict
+import numpy as np
 from PIL import Image
 
 # ── tuneable constants ────────────────────────────────────────────────────────
@@ -71,3 +72,35 @@ def load_and_downsample(path: str, max_px: int = MAX_DISPLAY_PX) -> Image.Image:
     if scale < 1.0:
         img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
     return img
+
+# Subsample stride for percentile estimation.
+# Every 4th pixel in each axis = 1/16 of pixels, plenty for a robust estimate.
+_PCTILE_STRIDE = 4
+
+def normalize_percentile(pil_img: Image.Image,
+                         low_pct: float = 1.0,
+                         high_pct: float = 99.0) -> Image.Image:
+    """
+    Linearly rescale a PIL image so that the low_pct and high_pct intensity
+    percentiles map to 0 and 255. Outliers are clipped.
+
+    Works on grayscale (L, I, F) and RGB images.
+    Uses a strided subsample for fast percentile estimation.
+    """
+    arr = np.asarray(pil_img)
+
+    # Subsample for fast percentile estimation (still very accurate)
+    sample = arr[::_PCTILE_STRIDE, ::_PCTILE_STRIDE]
+
+    lo = float(np.percentile(sample, low_pct))
+    hi = float(np.percentile(sample, high_pct))
+
+    # Guard against flat/nearly-flat frames (blank frames, saturated calibration)
+    span = hi - lo
+    if span < 1e-6:
+        span = 1.0
+
+    # Rescale → float32 → clip → uint8
+    out = (arr.astype(np.float32) - lo) * (255.0 / span)
+    out = np.clip(out, 0, 255).astype(np.uint8)
+    return Image.fromarray(out)
