@@ -1,18 +1,20 @@
 """
 main_gui.py
 -----------
-Top-level Tkinter application. Assembles EphysPanel, TiffPanel, and
-SyncController into a single window.
+Top-level Tkinter application. Assembles TiffPanel, EphysPanel,
+and SyncController into a single window.
 
 Layout:
-  ┌─────────────────────────────────────────────────────┐
-  ├──────────────────────┬──────────────────────────────┤
-  │  [Open TIFFs…]       │  [Open Ephys…]               │  panel toolbars
-  │    TIFF Panel        │      Ephys Panel             │
-  │    (image)           │      (traces)                │
-  │                      │                              │
+  ┌──────────────────────┬──────────────────────────────┐
+  │  [Open TIFFs…]       │  [Open Ephys…] [Window] ...  │  toolbars
+  │                      │  [＋ Spectrogram]             │
+  │    TIFF Panel        │  DC trace                    │
+  │    (image)           │  AC trace                    │
+  │                      │  Spectrogram (if enabled)    │
+  │                      │  Y-range controls            │
   ├──────────────────────┴──────────────────────────────┤
-  │  ◀◀  ▶ Play  ▶▶  Speed:[1x]  Offset:[__]s  0.00 s  │  sync controls
+  │  ◀◀  ▶ Play  ▶▶  Speed:[1x]  Offset:[__]s  0.00 s  │
+  │  ══════════════════════════════════  [scrubber]      │
   └─────────────────────────────────────────────────────┘
 
 Usage:
@@ -29,11 +31,14 @@ from tiff_panel import TiffPanel
 from sync_controller import SyncController
 
 # ── tuneable defaults ─────────────────────────────────────────────────────────
-DEFAULT_OFFSET   = 0.0    # seconds (ephys t=0 → TIFF t=0 by default)
-DEFAULT_SPEED    = 1.0
-SPEED_OPTIONS    = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0]
-WIN_WIDTH        = 1400
-WIN_HEIGHT       = 800
+DEFAULT_OFFSET  = 0.0
+DEFAULT_SPEED   = 1.0
+SPEED_OPTIONS   = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0]
+WIN_WIDTH       = 1400
+WIN_HEIGHT      = 800
+
+# Fraction of window width given to the TIFF panel (left side).
+TIFF_WIDTH_FRAC = 0.38
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -48,7 +53,6 @@ class MainApp(tk.Tk):
         self._build_ui()
         self._wire_controller()
 
-        # load files passed on the command line
         if ephys_path:
             self._ephys_panel.load_file(ephys_path)
         if tiff_folder:
@@ -59,29 +63,55 @@ class MainApp(tk.Tk):
     # =========================================================================
 
     def _build_ui(self):
-        # ── main paned area ────────────────────────────────────────────────
-        paned = tk.PanedWindow(self, orient=tk.HORIZONTAL, sashrelief=tk.RAISED,
-                               sashwidth=5)
-        paned.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=4, pady=4)
+        # Bottom controls must be packed before the paned window so they
+        # claim their space first and the paned area gets the rest.
+        self._build_bottom_controls()
 
+        # ── outer horizontal split: TIFF (left) | EphysPanel (right) ──────
+        self._h_paned = tk.PanedWindow(
+            self,
+            orient=tk.HORIZONTAL,
+            sashrelief=tk.RAISED,
+            sashwidth=5,
+        )
+        self._h_paned.pack(side=tk.TOP, fill=tk.BOTH, expand=True,
+                           padx=4, pady=4)
+
+        # Left pane — TIFF viewer
         self._tiff_panel = TiffPanel(
-            paned,
+            self._h_paned,
             frame_rate=1.0,
             on_folder_loaded=self._on_tiff_loaded,
-            bd=1, relief=tk.SUNKEN)
-        paned.add(self._tiff_panel, minsize=200)
+            on_roi_select=self._on_roi_select,
+            bd=1, relief=tk.SUNKEN,
+        )
+        self._h_paned.add(self._tiff_panel, minsize=200, stretch="always")
 
+        # Right pane — Ephys panel (traces + optional spectrogram, self-contained)
         self._ephys_panel = EphysPanel(
-            paned,
+            self._h_paned,
             on_file_loaded=self._on_ephys_loaded,
-            bd=1, relief=tk.SUNKEN)
-        paned.add(self._ephys_panel, minsize=300)
+            bd=1, relief=tk.SUNKEN,
+        )
+        self._h_paned.add(self._ephys_panel, minsize=300, stretch="always")
 
-        # give ephys panel more initial space
+        # Place the horizontal sash after the window has real dimensions.
         self.update_idletasks()
-        paned.sash_place(0, int(WIN_WIDTH * 0.38), 0)
+        self._h_paned.sash_place(0, int(WIN_WIDTH * TIFF_WIDTH_FRAC), 0)
 
-        # ── bottom sync controls ───────────────────────────────────────────
+    def _build_bottom_controls(self):
+        """Scrubber + transport bar, packed at the bottom of the window."""
+        # Scrubber sits flush at the very bottom edge.
+        self._slider_var = tk.DoubleVar(value=0.0)
+        self._slider = ttk.Scale(
+            self, from_=0.0, to=1.0,
+            orient=tk.HORIZONTAL,
+            variable=self._slider_var,
+            command=self._on_slider,
+        )
+        self._slider.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=(0, 2))
+
+        # Transport / settings bar sits just above the scrubber.
         ctrl = tk.Frame(self, bd=1, relief=tk.RAISED)
         ctrl.pack(side=tk.BOTTOM, fill=tk.X, padx=4, pady=2)
 
@@ -95,35 +125,27 @@ class MainApp(tk.Tk):
         tk.Button(ctrl, text="▶▶", width=3,
                   command=self._step_fwd).pack(side=tk.LEFT, padx=2)
 
-        # speed selector
         tk.Label(ctrl, text="  Speed:").pack(side=tk.LEFT, padx=(8, 2))
         self._speed_var = tk.StringVar(value="1x")
-        speed_menu = ttk.Combobox(ctrl, textvariable=self._speed_var,
-                                  values=[f"{s}x" for s in SPEED_OPTIONS],
-                                  state="readonly", width=5)
+        speed_menu = ttk.Combobox(
+            ctrl, textvariable=self._speed_var,
+            values=[f"{s}x" for s in SPEED_OPTIONS],
+            state="readonly", width=5,
+        )
         speed_menu.pack(side=tk.LEFT)
         speed_menu.bind("<<ComboboxSelected>>", self._on_speed_change)
 
-        # TIFF offset
-        tk.Label(ctrl, text="  TIFF offset (s):").pack(side=tk.LEFT, padx=(12, 2))
+        tk.Label(ctrl, text="  TIFF offset (s):").pack(side=tk.LEFT,
+                                                        padx=(12, 2))
         self._offset_var = tk.StringVar(value=str(DEFAULT_OFFSET))
         offset_entry = tk.Entry(ctrl, textvariable=self._offset_var, width=8)
         offset_entry.pack(side=tk.LEFT)
         offset_entry.bind("<Return>",   self._apply_offset)
         offset_entry.bind("<FocusOut>", self._apply_offset)
 
-        # current-time label (right side)
         self._time_var = tk.StringVar(value="0.00 s")
         tk.Label(ctrl, textvariable=self._time_var, width=12
                  ).pack(side=tk.RIGHT, padx=6)
-
-        # shared scrubber
-        self._slider_var = tk.DoubleVar(value=0.0)
-        self._slider = ttk.Scale(self, from_=0.0, to=1.0,
-                                 orient=tk.HORIZONTAL,
-                                 variable=self._slider_var,
-                                 command=self._on_slider)
-        self._slider.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=(0, 2))
 
     # =========================================================================
     # Controller wiring
@@ -143,17 +165,20 @@ class MainApp(tk.Tk):
     # =========================================================================
 
     def _on_ephys_loaded(self, ef):
-        """Called by EphysPanel after a file loads. Update shared timeline."""
         self._ctrl.set_max_time(ef.duration)
         self._slider.configure(to=ef.duration)
         self._slider_var.set(0.0)
         self._time_var.set("0.00 s")
 
     def _on_tiff_loaded(self, n_frames, frame_rate):
-        """Called by TiffPanel after a folder loads."""
-        # Nothing to do here currently — timeline is driven by ephys duration.
-        # Could extend to warn if TIFF duration + offset exceeds ephys duration.
-        pass
+        pass   # timeline is driven by ephys duration
+
+    def _on_roi_select(self):
+        """Called by TiffPanel before entering ROI drawing mode.
+        Pauses playback so mouse events aren't interrupted by the tick loop."""
+        if self._ctrl.is_playing:
+            self._ctrl.pause()
+            self._play_btn.config(text="▶  Play")
 
     # =========================================================================
     # Sync controls
@@ -181,15 +206,12 @@ class MainApp(tk.Tk):
 
     def _on_slider(self, value):
         t = float(value)
-        # avoid feedback loop: only seek if meaningfully different from current
         if abs(t - self._ctrl.current_time) > 0.01:
             self._ctrl.seek(t)
 
     def _on_tick(self, t: float):
-        """Called by SyncController on every playback tick."""
         self._slider_var.set(t)
         self._time_var.set(f"{t:.2f} s")
-        # if playback reached the end, reset button label
         if not self._ctrl.is_playing:
             self._play_btn.config(text="▶  Play")
 
