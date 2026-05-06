@@ -5,11 +5,11 @@ Extract a time-range slice of ephys + TIFF data into a new output folder.
 
 Usage:
     python section_extraction.py ephys_file tiff_folder output_folder \
-        -start 1622 -end 1781 [-offset 30]
+        -start 2900 -end 3100 [-offset 30]
 
-    -start / -end   : TIFF frame indices (inclusive) that define the window.
-    -offset         : optional integer frame offset applied to the TIFF range
-                      before mapping to ephys time (default 0).
+    -start / -end   : Ephys time in seconds (inclusive) defining the window.
+    -offset         : Frames the TIFF recording started after ephys t=0.
+                      tiff_frame = ephys_second - offset  (default 0).
 
 Outputs inside <output_folder>:
     ephys_section.h5        – HDF5 file with the sliced analogScans + header
@@ -26,48 +26,45 @@ import h5py
 import numpy as np
 
 
-# ── natural sort helper (same logic as the viewer) ────────────────────────────
+# ── TIFF collection ───────────────────────────────────────────────────────────
 
-def _natural_key(s: str):
-    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
-
-
-def collect_tiffs(folder: str) -> list[str]:
-    paths = [
-        os.path.join(folder, f)
-        for f in os.listdir(folder)
-        if f.lower().endswith((".tif", ".tiff"))
-    ]
-    paths.sort(key=lambda p: _natural_key(os.path.basename(p)))
-    return paths
+def collect_tiffs(folder: str) -> dict:
+    """
+    Return a dict mapping embedded frame number -> full path for every
+    .tif/.tiff in folder.  The frame number is the last integer in the
+    filename, e.g. '012726(Slice3)02870.tif' -> 2870.
+    """
+    result = {}
+    for f in os.listdir(folder):
+        if f.lower().endswith((".tif", ".tiff")):
+            nums = re.findall(r"\d+", f)
+            if nums:
+                frame_num = int(nums[-1])
+                result[frame_num] = os.path.join(folder, f)
+    return result
 
 
 # ── ephys slicing ─────────────────────────────────────────────────────────────
 
-def extract_ephys(src_path: str, dst_path: str,
-                  t_start: float, t_end: float) -> None:
+def extract_ephys(src_path, dst_path, t_start, t_end):
     """
     Copy the ephys HDF5, replacing every sweep's analogScans with the
     [t_start, t_end) time slice (seconds).  Header is copied verbatim.
     """
     with h5py.File(src_path, "r") as src, h5py.File(dst_path, "w") as dst:
-        # ── copy header exactly ───────────────────────────────────────
         src.copy("header", dst, name="header")
 
         sample_rate = float(src["header"]["AcquisitionSampleRate"][0, 0])
-
         sweeps = sorted(k for k in src.keys() if k.startswith("sweep_"))
 
-        cumulative_offset = 0  # running sample count across sweeps
+        cumulative_offset = 0
 
         for sweep in sweeps:
             grp_src = src[sweep]
             n_samples_sweep = grp_src["analogScans"].shape[1]
 
             sweep_t_start = cumulative_offset / sample_rate
-            sweep_t_end   = (cumulative_offset + n_samples_sweep) / sample_rate
 
-            # local sample indices within this sweep
             local_start = max(0, int((t_start - sweep_t_start) * sample_rate))
             local_stop  = min(n_samples_sweep,
                                int((t_end   - sweep_t_start) * sample_rate))
@@ -79,14 +76,12 @@ def extract_ephys(src_path: str, dst_path: str,
                     if local_stop > local_start:
                         chunk = grp_src["analogScans"][:, local_start:local_stop]
                     else:
-                        # this sweep falls entirely outside the window
                         chunk = grp_src["analogScans"][:, 0:0]
                     grp_dst.create_dataset("analogScans", data=chunk,
                                            compression="gzip", compression_opts=4)
                 else:
                     grp_src.copy(key, grp_dst, name=key)
 
-            # copy sweep-level attributes
             for attr_key, attr_val in grp_src.attrs.items():
                 grp_dst.attrs[attr_key] = attr_val
 
@@ -97,17 +92,17 @@ def extract_ephys(src_path: str, dst_path: str,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Extract a TIFF-frame window of ephys + imaging data."
+        description="Extract a time-window slice of ephys + TIFF imaging data."
     )
-    parser.add_argument("ephys_file",   help="Path to WaveSurfer HDF5 file")
-    parser.add_argument("tiff_folder",  help="Folder containing source TIFFs")
+    parser.add_argument("ephys_file",    help="Path to WaveSurfer HDF5 file")
+    parser.add_argument("tiff_folder",   help="Folder containing source TIFFs")
     parser.add_argument("output_folder", help="Destination folder (created if absent)")
     parser.add_argument("-start",  type=int, required=True,
-                        help="First TIFF frame index to keep (0-based, inclusive)")
+                        help="Start of window in ephys seconds (inclusive)")
     parser.add_argument("-end",    type=int, required=True,
-                        help="Last  TIFF frame index to keep (0-based, inclusive)")
+                        help="End of window in ephys seconds (inclusive)")
     parser.add_argument("-offset", type=int, default=0,
-                        help="Frame offset added before mapping to ephys time (default 0)")
+                        help="Frames the TIFF recording lags behind ephys t=0 (default 0)")
     args = parser.parse_args()
 
     # ── validate inputs ───────────────────────────────────────────────
@@ -118,37 +113,32 @@ def main():
     if args.start > args.end:
         sys.exit(f"ERROR: -start ({args.start}) must be <= -end ({args.end})")
 
-    # ── collect TIFFs ─────────────────────────────────────────────────
+    # ── collect TIFFs by embedded frame number ────────────────────────
     all_tiffs = collect_tiffs(args.tiff_folder)
     if not all_tiffs:
         sys.exit(f"ERROR: no .tif/.tiff files found in {args.tiff_folder}")
 
-    n_frames = len(all_tiffs)
-
-    # -start/-end are in ephys-time seconds.
-    # tiff_frame = ephys_second - offset  (tiffs started `offset` seconds late)
+    # tiff_frame_number = ephys_second - offset
     tiff_start = args.start - args.offset
     tiff_end   = args.end   - args.offset  # inclusive
 
-    if tiff_start < 0 or tiff_end >= n_frames:
+    selected_tiffs = [
+        all_tiffs[n] for n in sorted(all_tiffs)
+        if tiff_start <= n <= tiff_end
+    ]
+
+    if not selected_tiffs:
         sys.exit(
-            f"ERROR: TIFF frame range [{tiff_start}, {tiff_end}] out of bounds "
-            f"(folder has {n_frames} frames, indices 0–{n_frames - 1})"
+            f"ERROR: no TIFF frames found in range [{tiff_start}, {tiff_end}]. "
+            f"Available frame numbers: {min(all_tiffs)}–{max(all_tiffs)}"
         )
 
-    frame_start = tiff_start
-    frame_end   = tiff_end
-
-    selected_tiffs = all_tiffs[frame_start : frame_end + 1]
     print(f"Selected {len(selected_tiffs)} TIFFs "
-          f"(frames {frame_start}–{frame_end})")
+          f"(frame numbers {tiff_start}–{tiff_end})")
 
-    # ── derive ephys time window ───────────────────────────────────────
-    # Frame rate is always 1 Hz, so frame index == seconds.
-    # TIFFs started `offset` seconds into the ephys recording, so:
-    #   ephys_second = tiff_frame + offset
-    t_start = float(frame_start + args.offset)
-    t_end   = float(frame_end   + args.offset + 1)  # +1 to include last frame fully
+    # ── ephys time window (1 Hz so frame number == second) ───────────
+    t_start = float(args.start)
+    t_end   = float(args.end + 1)  # +1 to include the last second fully
 
     print(f"Ephys window   : {t_start:.1f} s  →  {t_end:.1f} s")
 
