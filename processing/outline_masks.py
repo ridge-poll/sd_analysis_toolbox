@@ -18,10 +18,10 @@ LINE_THICKNESS = 2        # Perimeter line width in pixels
 # Add/remove/reorder to taste.
 COLORS = [
     (255,  50,  50),   # red
-    (  0, 220,  80),   # green
-    (  0, 180, 255),   # cyan-blue
     (255, 165,   0),   # orange
     (255, 255,   0),   # yellow
+    (  0, 220,  80),   # green
+    (  0, 180, 255),   # cyan-blue
     (140,  60, 255),   # violet
     (255,  60, 200),   # pink
     (255, 255, 255),   # white
