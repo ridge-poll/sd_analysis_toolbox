@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-master.py
+main_outline_figs.py
 ---------
 Runs both figures — the SD outline figure and the ephys trace figure —
 from a single command.
 
 Usage:
-    python master.py <reference_tiff> <bitmask_folder> <h5_file> \
+    python main_outline_figs.py <reference_tiff> <bitmask_folder> <h5_file> \
                      <start_time> <stop_time>                     \
                      <ts1> <ts2> ... <tsN>                        \
                      [--save-outline path] [--save-ephys path]
