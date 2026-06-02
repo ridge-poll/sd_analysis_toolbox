@@ -12,8 +12,8 @@ Usage:
                       tiff_frame = ephys_second - offset  (default 0).
 
 Outputs inside <output_folder>:
-    ephys_section.h5        – HDF5 file with the sliced analogScans + header
-    tiffs/                  – copy of the selected TIFF frames
+    ephys_section.h5        - HDF5 file with the sliced analogScans + header
+    tiffs/                  - copy of the selected TIFF frames
 """
 
 import argparse
@@ -152,7 +152,7 @@ def main():
     for i, src_path in enumerate(selected_tiffs):
         dst_path = os.path.join(tiff_out_dir, os.path.basename(src_path))
         shutil.copy2(src_path, dst_path)
-        if (i + 1) % 50 == 0 or (i + 1) == len(selected_tiffs):
+        if (i + 1) % 10 == 0 or (i + 1) == len(selected_tiffs):
             print(f"  {i + 1}/{len(selected_tiffs)} copied", end="\r")
     print()
 
