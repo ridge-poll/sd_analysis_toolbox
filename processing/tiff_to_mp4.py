@@ -33,7 +33,7 @@ if not files:
 
 # Preview settings
 FPS = 30
-SCALE = 0.5
+SCALE = 1
 
 output_path = os.path.join(
     output_folder,

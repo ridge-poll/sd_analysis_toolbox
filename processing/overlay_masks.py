@@ -20,8 +20,9 @@ Tuneable parameters (edit below):
 """
 
 # ── PARAMETERS ────────────────────────────────────────────────────────────────
-MASK_ALPHA = 0.3        # 0.0 = invisible overlay, 1.0 = fully opaque overlay
-OVERLAY_COLOR = (255, 255, 255)  # RGB tint applied to the mask region
+MASK_ALPHA = 0.2        # 0.0 = invisible overlay, 1.0 = fully opaque overlay
+# OVERLAY_COLOR = (96, 195, 252)  # RGB tint applied to the mask region
+OVERLAY_COLOR = (255, 0, 0)  # RGB tint applied to the mask region
 # ──────────────────────────────────────────────────────────────────────────────
 
 import sys
