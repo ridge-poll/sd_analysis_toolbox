@@ -6,7 +6,7 @@ Runs both figures — the SD outline figure and the ephys trace figure —
 from a single command.
 
 Usage:
-    python main_outline_figs.py <reference_tiff> <bitmask_folder> <h5_file> \
+    python main_outline_figs.py <h5_file> <reference_tiff> <bitmask_folder> \
                      <start_time> <stop_time>                     \
                      <ts1> <ts2> ... <tsN>                        \
                      [--save-outline path] [--save-ephys path]
@@ -130,7 +130,7 @@ def find_mask_for_timestamp(bitmask_folder: str, ts: int) -> str:
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    (reference_tiff, bitmask_folder, h5_file,
+    (h5_file, reference_tiff, bitmask_folder,
      start_time, stop_time, timestamps,
      save_outline, save_ephys) = parse_args(sys.argv[1:])
 
