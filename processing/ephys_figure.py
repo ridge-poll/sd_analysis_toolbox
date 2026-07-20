@@ -26,15 +26,17 @@ LINE_COLORS = [
     "#f032e6",  # magenta
     "#ffffff",  # white
 ]
-LINE_ALPHA      = 0.85
-LINE_WIDTH      = 1.2
-TRACE_COLOR     = "steelblue"
-TRACE_LW        = 0.7
-FIG_SIZE        = (12, 5)     # inches
-BG_COLOR        = "#1a1a2e"
-AXES_COLOR      = "#16213e"
-GRID_COLOR      = "#2a2a4a"
-TEXT_COLOR      = "#e0e0e0"
+
+
+# LINE_ALPHA      = 0.85
+# LINE_WIDTH      = 1.2
+# TRACE_COLOR     = "steelblue"
+# TRACE_LW        = 0.7
+# FIG_SIZE        = (12, 5)     # inches
+# BG_COLOR        = "#1a1a2e"
+# AXES_COLOR      = "#16213e"
+# GRID_COLOR      = "#2a2a4a"
+# TEXT_COLOR      = "#e0e0e0"
 
 LINE_ALPHA      = 0.85
 LINE_WIDTH      = 1.2

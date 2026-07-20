@@ -16,6 +16,7 @@ Usage:
 LINE_THICKNESS = 2        # Perimeter line width in pixels
 # Colors cycle through this list in argument order (RGB tuples).
 # Add/remove/reorder to taste.
+
 COLORS = [
     (255,  50,  50),   # red
     (255, 165,   0),   # orange
@@ -25,6 +26,20 @@ COLORS = [
     (140,  60, 255),   # violet
     (255,  60, 200),   # pink
 ]
+# COLORS = [
+#     ( 68,   1,  84),   # deep purple
+#     ( 72,  40, 120),
+#     ( 62,  74, 137),
+#     ( 49, 104, 142),
+#     ( 38, 130, 142),
+#     ( 31, 158, 137),
+#     ( 53, 183, 121),
+#     (109, 205,  89),
+#     (180, 222,  44),
+#     (253, 231,  37)    # bright yellow
+# ]
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 
 import sys
